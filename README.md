@@ -66,6 +66,56 @@ Connect Claude Code (or any MCP client) to `http://127.0.0.1:8765` (or pipe via
   the module, but verify `/dev/accel/accel0` appears after rebuild.
 - Podman (enabled by default; override with `virtualisation.podman.enable`).
 
+## Using it
+
+Once `services.mneme.enable = true;` and rebuilt:
+
+- **REST API**: `http://127.0.0.1:8765` — Swagger UI at `/docs`.
+  Try: `/files`, `/document?path=...`, `/query?q=...` (whatever the upstream
+  exposes — see `/openapi.json`).
+- **MCP server**: `http://127.0.0.1:8766` — wire any MCP-capable client at
+  this URL. For Claude Desktop / Crush / opencode, point their MCP config
+  at the SSE/HTTP endpoint, e.g. (Claude Desktop config):
+
+  ```json
+  {
+    "mcpServers": {
+      "mneme": { "url": "http://127.0.0.1:8766" }
+    }
+  }
+  ```
+
+  Some clients only speak stdio MCP — bridge with `mcp-proxy` if so.
+
+### How indexing happens
+
+vault-mcp's file-watcher does the work for you: an initial recursive scan
+of `paths.vault_dir` on first start, then debounced re-indexing on file
+changes (default 2 s). No manual trigger. Watch progress with:
+
+```bash
+journalctl -u mneme-vault-mcp -f
+```
+
+The ChromaDB index lives at `/var/lib/mneme/vault-mcp/chroma_db/`.
+
+### Verifying the NPU is actually being used
+
+```bash
+# OVMS should list NPU among detected devices:
+journalctl -u podman-mneme-ovms | grep -i 'available devices'
+# expected: "Available devices for Open VINO: CPU, NPU"
+
+# Direct embedding latency check (NPU ≈ 5 ms, CPU ≈ 50–100 ms):
+time curl -s -X POST http://127.0.0.1:8000/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"embeddings","input":"hello"}' | head -c 80
+```
+
+If only `CPU` shows up in OVMS logs, NPU passthrough isn't working — check
+`/dev/accel/accel0` exists on the host and the container's `--group-add`
+GIDs match `getent group render | cut -d: -f3`.
+
 ## Status / caveats
 
 - **vault-mcp uses a runtime venv, not a pure Nix build.** Upstream pins

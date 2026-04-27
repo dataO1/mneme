@@ -103,11 +103,12 @@ in
       extraOptions = [
         # NPU device passthrough.
         "--device=/dev/accel/accel0"
-        # Grant the in-container user the host's render group GID so it can
-        # open /dev/accel/accel0. Names are resolved against the host's
-        # /etc/group by podman.
-        "--group-add=render"
-        "--group-add=video"
+        # Pass the host's render/video GIDs *numerically* — podman resolves
+        # group names against the container image's /etc/group, and the OVMS
+        # base image doesn't define a "render" group. We pin the GIDs above
+        # via users.groups so this stays in lockstep.
+        "--group-add=${toString config.users.groups.render.gid}"
+        "--group-add=${toString config.users.groups.video.gid}"
       ];
     };
   };

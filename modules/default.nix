@@ -95,6 +95,12 @@ in
     };
     users.groups.${cfg.group} = { };
 
+    # Pin render/video GIDs so the OVMS container's --group-add=<gid>
+    # references stay correct. Conventional NixOS values; mkDefault means
+    # any other module can override.
+    users.groups.render.gid = lib.mkDefault 303;
+    users.groups.video.gid = lib.mkDefault 26;
+
     systemd.tmpfiles.rules = [
       "d ${cfg.stateDir} 0750 ${cfg.user} ${cfg.group} -"
       "d ${cfg.stateDir}/ovms-models 0750 ${cfg.user} ${cfg.group} -"
