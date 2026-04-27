@@ -34,13 +34,17 @@ if [ ! -c /dev/accel/accel0 ]; then
   exit 2
 fi
 
-# Common podman flags for NPU passthrough.
+# Common podman flags for NPU passthrough. --workdir /tmp avoids a podman
+# overlayfs glitch when an image's WORKDIR collides with a baked-in path
+# (the openvino dev image sets WORKDIR=/opt/intel/openvino, and overlayfs
+# on this storage refuses to mkdir over the existing dir at run time).
 podman_npu() {
   sudo podman run --rm \
     --device=/dev/accel/accel0 \
     --group-add="$RENDER_GID" \
     --group-add="$VIDEO_GID" \
     --user=0:0 \
+    --workdir /tmp \
     "$@"
 }
 
