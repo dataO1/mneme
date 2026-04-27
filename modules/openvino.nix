@@ -38,17 +38,23 @@ let
         --pooling CLS \
         --target_device ${cfg.embeddingDevice}
 
-      # OVMS --pull writes <model>/graph.pbtxt but in this version it does
-      # *not* write the top-level config.json that --config_path expects at
-      # serve time, even when given --config_path during pull. Write it
-      # ourselves; the structure is fixed.
+      # OVMS --pull writes <model>/graph.pbtxt but does NOT write the
+      # top-level config.json. Hand-write it.
+      #
+      # Important quirk: OVMS resolves model files as
+      #   <model_repository_path>/<mediapipe.name>/<relative-path-from-pbtxt>
+      # regardless of the explicit graph_path. So with name="embeddings",
+      # OVMS expects files under /models/embeddings/. Symlink the pulled
+      # model dir there so the resolution lines up.
+      ln -sfnT "${cfg.embeddingModel}" "$MODELS_DIR/embeddings"
+
       cat > "$MODELS_DIR/config.json" <<'EOF'
       {
         "model_config_list": [],
         "mediapipe_config_list": [
           {
             "name": "embeddings",
-            "graph_path": "/models/${cfg.embeddingModel}/graph.pbtxt"
+            "graph_path": "/models/embeddings/graph.pbtxt"
           }
         ]
       }
