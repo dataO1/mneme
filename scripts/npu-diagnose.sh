@@ -14,7 +14,12 @@
 
 set -euo pipefail
 
+# The OVMS runtime image is stripped down to the serving binary (no python3
+# in PATH), so device/compile probes use the OpenVINO dev image, which ships
+# python3 + openvino bindings + benchmark_app. The minilm + debug stages
+# stick with the model_server image since they test that exact serving path.
 OVMS_IMAGE="${OVMS_IMAGE:-openvino/model_server:2026.0-gpu}"
+OV_DEV_IMAGE="${OV_DEV_IMAGE:-openvino/ubuntu24_dev:2026.0.0}"
 RENDER_GID="$(getent group render | cut -d: -f3)"
 VIDEO_GID="$(getent group video  | cut -d: -f3)"
 TEST_MODELS_DIR="${TEST_MODELS_DIR:-/tmp/mneme-npu-test}"
@@ -39,15 +44,20 @@ podman_npu() {
     "$@"
 }
 
-stage_device() {
-  echo "=== [1/3] NPU plugin probe ==="
-  echo "Expecting 'Devices: [...,NPU,...]' and a non-empty FULL_DEVICE_NAME."
-  echo
+# Run a Python snippet inside the OpenVINO dev image with NPU passthrough.
+# Reads stdin as the script body.
+ov_python() {
   podman_npu \
     --entrypoint /bin/bash \
-    "$OVMS_IMAGE" \
-    -c '
-python3 - <<PY
+    "$OV_DEV_IMAGE" \
+    -lc 'python3 -'
+}
+
+stage_device() {
+  echo "=== [1/3] NPU plugin probe (image: $OV_DEV_IMAGE) ==="
+  echo "Expecting 'Devices: [...,NPU,...]' and a non-empty FULL_DEVICE_NAME."
+  echo
+  ov_python <<'PY'
 import openvino as ov
 core = ov.Core()
 print("Devices:", core.available_devices)
@@ -59,26 +69,22 @@ if "NPU" in core.available_devices:
         print("NPU driver version: <unavailable>", e)
 else:
     print("FAIL: NPU not in available devices — plugin or device passthrough is broken.")
-PY'
+PY
   echo
 }
 
 stage_compile() {
-  echo "=== [2/3] Trivial-model compile + inference on NPU ==="
+  echo "=== [2/3] Trivial-model compile + inference on NPU (image: $OV_DEV_IMAGE) ==="
   echo "Expecting 'compiled on NPU OK' and 'inference shape: (1, 32)'."
   echo
-  podman_npu \
-    --entrypoint /bin/bash \
-    "$OVMS_IMAGE" \
-    -c '
-python3 - <<PY
+  ov_python <<'PY'
 import numpy as np
 import openvino as ov
 import openvino.runtime.opset12 as ops
 
 # 1-op MatMul, fully static shapes. If this fails, the NPU compiler is broken
-# in this image build (or the silicon does not support whatever fundamental
-# op makes a MatMul work).
+# in this image build (or the silicon does not support a basic MatMul, which
+# would be a serious driver/firmware issue).
 inp = ops.parameter([1, 32], dtype=np.float32, name="x")
 w   = ops.constant(np.random.randn(32, 32).astype(np.float32))
 out = ops.matmul(inp, w, transpose_a=False, transpose_b=False)
@@ -90,7 +96,7 @@ print("compiled on NPU OK")
 
 result = compiled([np.random.randn(1, 32).astype(np.float32)])
 print("inference shape:", result[compiled.output(0)].shape)
-PY'
+PY
   echo
 }
 
