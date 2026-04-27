@@ -33,11 +33,27 @@ let
         ${ovmsImage} \
         --pull \
         --model_repository_path /models \
-        --config_path /models/config.json \
         --source_model ${cfg.embeddingModel} \
         --task embeddings \
         --pooling CLS \
         --target_device ${cfg.embeddingDevice}
+
+      # OVMS --pull writes <model>/graph.pbtxt but in this version it does
+      # *not* write the top-level config.json that --config_path expects at
+      # serve time, even when given --config_path during pull. Write it
+      # ourselves; the structure is fixed.
+      cat > "$MODELS_DIR/config.json" <<'EOF'
+      {
+        "model_config_list": [],
+        "mediapipe_config_list": [
+          {
+            "name": "embeddings",
+            "graph_path": "/models/${cfg.embeddingModel}/graph.pbtxt"
+          }
+        ]
+      }
+      EOF
+
       echo "[mneme-ovms-pull] Done."
     '';
   };
