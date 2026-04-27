@@ -84,7 +84,12 @@ stage_compile() {
   ov_python <<'PY'
 import numpy as np
 import openvino as ov
-import openvino.runtime.opset12 as ops
+
+# OpenVINO 2026 moved opset12 out of openvino.runtime; try both.
+try:
+    import openvino.opset12 as ops
+except ImportError:
+    import openvino.runtime.opset12 as ops
 
 # 1-op MatMul, fully static shapes. If this fails, the NPU compiler is broken
 # in this image build (or the silicon does not support a basic MatMul, which
