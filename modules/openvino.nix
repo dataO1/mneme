@@ -33,6 +33,7 @@ let
         ${ovmsImage} \
         --pull \
         --model_repository_path /models \
+        --config_path /models/config.json \
         --source_model ${cfg.embeddingModel} \
         --task embeddings \
         --pooling CLS \
