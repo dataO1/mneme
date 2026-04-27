@@ -133,7 +133,10 @@ in
     systemd.tmpfiles.rules = [
       "d ${cfg.stateDir} 0750 ${cfg.user} ${cfg.group} -"
       "d ${cfg.stateDir}/ovms-models 0750 ${cfg.user} ${cfg.group} -"
-      "d ${cfg.stateDir}/vault-mcp 0750 ${cfg.user} ${cfg.group} -"
+      # Recursive chown: when cfg.user changes (e.g. mneme -> data01) the
+      # existing tree must be re-owned, otherwise ChromaDB hits 'attempt to
+      # write a readonly database'.
+      "Z ${cfg.stateDir}/vault-mcp 0750 ${cfg.user} ${cfg.group} -"
     ];
 
     # Ensure the kernel NPU driver is available.
