@@ -214,7 +214,11 @@ in
       description = "Periodic mneme symlink farm rebuild";
       wantedBy = [ "timers.target" ];
       timerConfig = {
-        OnBootSec = "30s";
+        # Fire as soon as the timer loads (after switch-to-configuration
+        # has returned, so nixos-rebuild doesn't block on the walk). Then
+        # again every 30 min. Nice=10 + IOSchedulingClass=idle keeps the
+        # build out of the way of foreground work.
+        OnActiveSec = "0";
         OnUnitActiveSec = "30min";
         Persistent = true;
       };
