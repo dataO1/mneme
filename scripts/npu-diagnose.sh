@@ -117,6 +117,10 @@ stage_minilm() {
   mkdir -p "$TEST_MODELS_DIR"
   chmod 777 "$TEST_MODELS_DIR"
 
+  # OVMS only accepts CLS or LAST pooling for embeddings (not MEAN, even
+  # though all-MiniLM-L6-v2 was trained with MEAN). For the diagnostic we
+  # just want to know if the NPU compile path works on a smaller embedding
+  # model — quality of the resulting vectors doesn't matter here.
   podman_npu \
     -v "$TEST_MODELS_DIR":/models:rw \
     "$OVMS_IMAGE" \
@@ -124,7 +128,7 @@ stage_minilm() {
     --model_repository_path /models \
     --source_model sentence-transformers/all-MiniLM-L6-v2 \
     --task embeddings \
-    --pooling MEAN \
+    --pooling CLS \
     --target_device NPU || {
       echo
       echo "--- minilm pull failed; rerun with target_device CPU to confirm pull itself works:"
@@ -134,7 +138,7 @@ stage_minilm() {
         --pull \
         --model_repository_path /models \
         --source_model sentence-transformers/all-MiniLM-L6-v2 \
-        --task embeddings --pooling MEAN \
+        --task embeddings --pooling CLS \
         --target_device CPU
     }
   echo
