@@ -111,14 +111,16 @@ in
         ".ipynb"
       ];
       description = ''
-        File extensions vault-mcp's SimpleDirectoryReader is allowed to
-        load. The bootstrap also installs the matching extractor packages
-        (docx2txt, python-pptx, openpyxl, ebooklib) into the venv so that
-        every extension here actually works at runtime.
+        File extensions vault-mcp is allowed to load. The bootstrap patches
+        the loader to drop everything outside this list before it reaches
+        SimpleDirectoryReader, so a file with an unrecognised extension
+        can never trigger a lazy-import crash (the way audio/video did
+        with whisper, .docx with docx2txt, .ipynb with nbconvert, ...).
 
-        Note: SimpleDirectoryReader ignores required_exts when constructed
-        with input_files=, so we *also* prune at the farm level via
-        excludePatterns to keep unwanted formats from reaching the loader.
+        Add an extension here only if you've also installed the matching
+        extractor package — see the bootstrap's `pip install` line for the
+        currently-bundled set (docx2txt, python-pptx, openpyxl, ebooklib,
+        nbconvert).
       '';
     };
 
