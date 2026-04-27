@@ -61,14 +61,40 @@ in
 
     embeddingModel = lib.mkOption {
       type = lib.types.str;
-      default = "OpenVINO/bge-base-en-v1.5-int8-ov";
+      default = "mixedbread-ai/mxbai-embed-large-v1";
       description = ''
-        HuggingFace repo of the embedding model. Use a pre-converted
-        OpenVINO IR (under the OpenVINO/ org) so OVMS can deploy it
-        directly without an export step. The default is the model the
-        OVMS docs use as a canonical example; bge-small is *not* in the
-        OpenVINO org, despite what the BAAI naming suggests.
-        NPU prefers static input shapes; INT8 IRs ship them.
+        HuggingFace repo of the embedding model. The pull oneshot exports
+        the model with optimum-cli, reshapes inputs to a static
+        embeddingMaxSeqLen, and writes the IR + tokenizer + a hand-crafted
+        graph.pbtxt for OVMS to serve. The model must be a stock-arch
+        encoder (BERT, RoBERTa, XLM-RoBERTa, ModernBERT, ...) supported
+        by optimum-intel, with a pooling type that matches embeddingPooling
+        (CLS or LAST — OVMS does not support MEAN).
+
+        Default mxbai-embed-large-v1: 335M params, 512 ctx, native CLS
+        pooling, MTEB ~64.7 — verified to compile on Arrow Lake NPU 3.
+      '';
+    };
+
+    embeddingMaxSeqLen = lib.mkOption {
+      type = lib.types.int;
+      default = 512;
+      description = ''
+        Static input sequence length baked into the IR before NPU compile.
+        NPU 3 (Arrow Lake) requires fully static shapes; this is the per-
+        request token limit. Pick the largest your model+NPU pair handles.
+        For ModernBERT-style models, 2048 has been verified.
+      '';
+    };
+
+    embeddingPooling = lib.mkOption {
+      type = lib.types.enum [ "CLS" "LAST" ];
+      default = "CLS";
+      description = ''
+        Pooling strategy applied to the model output by OVMS before
+        returning the embedding vector. Must match what the model was
+        trained with — using CLS on a MEAN-trained model degrades
+        embedding quality significantly. OVMS does not support MEAN.
       '';
     };
 

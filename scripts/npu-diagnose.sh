@@ -462,7 +462,9 @@ print("=" * 78)
 print(f"{'model':<45} {'seq':>6}  {'status':<18}")
 print("-" * 78)
 for model_id, seq, status, _ in results:
-    print(f"{model_id:<45} {seq:>6}  {status:<18}")
+    # Force str() — optimum's main_export sometimes leaks a Model object
+    # into the tuple slot, and Model.__format__ rejects width specifiers.
+    print(f"{str(model_id):<45} {str(seq):>6}  {str(status):<18}")
 print()
 
 oks = [r for r in results if r[2] == "ok"]
