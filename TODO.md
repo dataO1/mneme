@@ -1,5 +1,7 @@
 # mneme — open work
 
+
+
 ## Multi-instance support (separate DBs, shared embedding endpoint)
 
 vault-mcp uses `chromadb.PersistentClient` (SQLite under the hood). Multiple

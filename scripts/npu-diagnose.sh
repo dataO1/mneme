@@ -259,6 +259,102 @@ PY'
   echo
 }
 
+stage_static_nomic() {
+  echo "=== [5] Static-shape nomic-embed-text-v1.5 compile test on NPU ==="
+  echo "Tries seq_len 8192 → 2048 → 512, prints the largest that compiles."
+  echo "If any work, nomic-embed-text-v1.5 ships in the production pull;"
+  echo "if none, fall back to bge-base @ [1, 512] (NPU-3)."
+  echo
+
+  podman_npu \
+    --entrypoint /bin/bash \
+    -e HF_HOME=/tmp/hf-cache \
+    "$OV_DEV_IMAGE" \
+    -lc '
+set -e
+echo "Installing optimum[openvino] (one-shot, in-container)..."
+pip install --quiet --no-warn-script-location \
+  "optimum[openvino]>=1.20" "openvino-tokenizers" "einops"
+# nomic uses einops in some configs; harmless if unused.
+
+python3 - <<PY
+import subprocess, sys
+import numpy as np
+import openvino as ov
+
+MODEL = "nomic-ai/nomic-embed-text-v1.5"
+EXPORT_DIR = "/tmp/static-nomic"
+
+print(f"Exporting {MODEL} → {EXPORT_DIR} (INT8) ...")
+subprocess.check_call([
+    "optimum-cli", "export", "openvino",
+    "--model", MODEL,
+    "--task", "feature-extraction",
+    "--weight-format", "int8",
+    "--library", "transformers",
+    "--trust-remote-code",
+    EXPORT_DIR,
+])
+
+core = ov.Core()
+fresh = lambda: core.read_model(f"{EXPORT_DIR}/openvino_model.xml")
+print()
+print("Dynamic input shapes:", [str(p.partial_shape) for p in fresh().inputs])
+
+results = []
+for seq_len in (8192, 2048, 512):
+    print(f"\n--- seq_len = {seq_len}")
+    model = fresh()
+    try:
+        model.reshape({p.get_any_name(): [1, seq_len] for p in model.inputs})
+    except Exception as e:
+        print(f"  reshape failed: {e}")
+        results.append((seq_len, "reshape-failed", str(e)))
+        continue
+
+    try:
+        compiled = core.compile_model(model, "NPU")
+        print(f"  ✓ compiled OK at seq_len={seq_len}")
+    except Exception as e:
+        print(f"  ✗ NPU compile failed at seq_len={seq_len}")
+        msg = str(e)
+        # Print first 400 chars so we see compiler error category, not novel
+        print("  ", msg[:400].replace("\n", "\n  "))
+        results.append((seq_len, "compile-failed", msg))
+        continue
+
+    try:
+        inputs = {}
+        for p in model.inputs:
+            n = p.get_any_name()
+            shape = [1, seq_len]
+            dtype = np.int64 if "ids" in n or "mask" in n else np.float32
+            inputs[n] = np.zeros(shape, dtype=dtype)
+        out = compiled(inputs)
+        shapes = [list(v.shape) for v in out.values()]
+        print(f"  ✓ inference output shape(s): {shapes}")
+        results.append((seq_len, "ok", shapes))
+    except Exception as e:
+        print(f"  ✗ inference failed: {e}")
+        results.append((seq_len, "inference-failed", str(e)))
+
+print("\n========== SUMMARY ==========")
+for seq_len, status, _ in results:
+    print(f"  seq_len={seq_len}: {status}")
+
+oks = [r for r in results if r[1] == "ok"]
+if oks:
+    best = max(oks, key=lambda r: r[0])
+    print(f"\nVERDICT: nomic-embed-text-v1.5 compiles + runs on NPU at seq_len={best[0]}.")
+    print("→ Proceed with NPU-2: ship this model + seq_len in the production pull.")
+else:
+    print("\nVERDICT: nomic-embed-text-v1.5 does not compile on NPU at any tested seq_len.")
+    print("→ Fall back to NPU-3: keep bge-base @ [1, 512].")
+    sys.exit(2)
+PY'
+  echo
+}
+
 stage_debug() {
   echo "=== [4] Re-serve current bge-base config at debug log level ==="
   echo "Watch for the full NPU compile error chain. Ctrl-C to stop."
@@ -279,10 +375,11 @@ case "${1:-all}" in
   minilm)        stage_minilm ;;
   serve-minilm)  stage_serve_minilm ;;
   static-bge)    stage_static_bge ;;
+  static-nomic)  stage_static_nomic ;;
   debug)         stage_debug ;;
-  all)           stage_device; stage_compile; stage_minilm; stage_serve_minilm; stage_static_bge ;;
+  all)           stage_device; stage_compile; stage_minilm; stage_serve_minilm; stage_static_bge; stage_static_nomic ;;
   *)
-    echo "Usage: $0 [device|compile|minilm|serve-minilm|static-bge|debug|all]" >&2
+    echo "Usage: $0 [device|compile|minilm|serve-minilm|static-bge|static-nomic|debug|all]" >&2
     exit 1
     ;;
 esac
