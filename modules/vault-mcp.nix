@@ -44,7 +44,9 @@ let
     [embedding_model]
     provider = "openai_endpoint"
     model_name = "embeddings"
-    endpoint_url = "http://127.0.0.1:${toString cfg.ports.openvino}/v1"
+    # OVMS in --task embeddings mode serves OpenAI-compatible embeddings
+    # under /v3, not /v1. Verified by direct curl.
+    endpoint_url = "http://127.0.0.1:${toString cfg.ports.openvino}/v3"
     api_key = "unused"
 
     [retrieval]
