@@ -144,6 +144,49 @@ stage_minilm() {
   echo
 }
 
+stage_serve_minilm() {
+  echo "=== [3b] Serve all-MiniLM-L6-v2 on NPU and watch for compile ==="
+  echo "Looks for either 'state changed to: AVAILABLE' (NPU compile worked)"
+  echo "or 'Cannot compile model into target device' (same failure as bge-base)."
+  echo "Runs for ~30 s, then SIGTERMs the container. Binds 8002 (no clash)."
+  echo
+
+  if [ ! -d "$TEST_MODELS_DIR/sentence-transformers/all-MiniLM-L6-v2" ]; then
+    echo "FAIL: minilm model not pulled — run './$0 minilm' first." >&2
+    return 1
+  fi
+
+  # Symlink to a name OVMS resolves cleanly (its mediapipe loader looks for
+  # files at <repo>/<mediapipe.name>/...).
+  sudo ln -sfnT sentence-transformers/all-MiniLM-L6-v2 "$TEST_MODELS_DIR/embeddings"
+  sudo tee "$TEST_MODELS_DIR/config.json" > /dev/null <<'EOF'
+{
+  "model_config_list": [],
+  "mediapipe_config_list": [
+    { "name": "embeddings", "graph_path": "/models/embeddings/graph.pbtxt" }
+  ]
+}
+EOF
+
+  # `timeout` SIGKILLs after 30 s; podman run inherits and the container exits.
+  timeout 30 sudo podman run --rm -i \
+    --device=/dev/accel/accel0 \
+    --group-add="$RENDER_GID" \
+    --group-add="$VIDEO_GID" \
+    --user=0:0 \
+    --workdir /tmp \
+    -v "$TEST_MODELS_DIR":/models:ro \
+    -p 127.0.0.1:8002:8000 \
+    "$OVMS_IMAGE" \
+    --rest_port 8000 \
+    --config_path /models/config.json \
+    --log_level DEBUG 2>&1 \
+  | grep --line-buffered -iE 'available devices|state changed|cannot compile|target_device|compile model|fallback|npu|vcl_serializer' \
+  | head -50
+  echo
+  echo "(timeout reached or container exited)"
+}
+
 stage_debug() {
   echo "=== [4] Re-serve current bge-base config at debug log level ==="
   echo "Watch for the full NPU compile error chain. Ctrl-C to stop."
@@ -159,13 +202,14 @@ stage_debug() {
 }
 
 case "${1:-all}" in
-  device)  stage_device ;;
-  compile) stage_compile ;;
-  minilm)  stage_minilm ;;
-  debug)   stage_debug ;;
-  all)     stage_device; stage_compile; stage_minilm ;;
+  device)        stage_device ;;
+  compile)       stage_compile ;;
+  minilm)        stage_minilm ;;
+  serve-minilm)  stage_serve_minilm ;;
+  debug)         stage_debug ;;
+  all)           stage_device; stage_compile; stage_minilm; stage_serve_minilm ;;
   *)
-    echo "Usage: $0 [device|compile|minilm|debug|all]" >&2
+    echo "Usage: $0 [device|compile|minilm|serve-minilm|debug|all]" >&2
     exit 1
     ;;
 esac
