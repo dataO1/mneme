@@ -179,6 +179,16 @@ let
         's|reader\.load_data()|reader.load_data(num_workers=${toString cfg.indexWorkers})|g' \
         "$WORK/components/document_processing/document_loader.py"
 
+      # Constrain the input_files branch to text-y extensions only. Without
+      # required_exts, llama-index inspects any extension and demands
+      # whisper/etc. for audio/video. We also pre-filter audio/video at the
+      # farm level, but this defends against any leaks.
+      sed -i \
+        's|SimpleDirectoryReader(input_files=files_to_process)|SimpleDirectoryReader(input_files=files_to_process, required_exts=${
+          builtins.toJSON cfg.requiredExts
+        })|g' \
+        "$WORK/components/document_processing/document_loader.py"
+
       ${python}/bin/python -m venv "$VENV"
       "$VENV/bin/pip" install --upgrade pip wheel
 

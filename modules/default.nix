@@ -75,6 +75,7 @@ in
     excludePatterns = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [
+        # Dev / cache dirs
         ".git" ".direnv" ".envrc"
         ".cache" ".local" ".npm" ".pnpm-store" ".cargo" ".rustup"
         ".gradle" ".m2" ".ivy2" ".gem" ".thumbnails"
@@ -83,13 +84,32 @@ in
         ".next" ".nuxt" ".turbo" ".parcel-cache"
         "result" "result-*"
         ".DS_Store" ".trash" "Trash"
+        # Audio / video — vault-mcp's loader pulls in whisper for these and
+        # crashes if it isn't installed; we don't want them indexed anyway.
+        "*.mp3" "*.m4a" "*.flac" "*.ogg" "*.opus" "*.wav" "*.aac" "*.wma"
+        "*.mp4" "*.mkv" "*.mov" "*.avi" "*.webm" "*.wmv" "*.m4v" "*.flv"
+        # Big binary clutter that we'd never want as text either
+        "*.iso" "*.img" "*.dmg" "*.zip" "*.tar" "*.gz" "*.bz2" "*.xz"
+        "*.7z" "*.rar"
       ];
       description = ''
-        Directory/file names to prune when building the symlink farm that
-        vault-mcp indexes (find -name semantics, no globs). Source dirs
-        that are git repos use `git ls-files` instead, so .gitignore is
-        honoured automatically and this list only kicks in for non-repo
-        trees.
+        Names/globs to prune when building the symlink farm vault-mcp
+        indexes (passed to `fd --exclude`). Source dirs that are git repos
+        use `git ls-files` instead, so .gitignore is honoured automatically
+        and this list only kicks in for non-repo trees.
+      '';
+    };
+
+    requiredExts = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ".md" ".txt" ".rst" ".org" ".pdf" ".markdown" ];
+      description = ''
+        File extensions vault-mcp's SimpleDirectoryReader is allowed to
+        load. The bootstrap patches the bare `SimpleDirectoryReader(
+        input_files=...)` call site to pass these as `required_exts`,
+        which upstream forgot to do — without that, llama-index inspects
+        any extension it doesn't recognise (audio, video, ...) and demands
+        extra dependencies (e.g. whisper).
       '';
     };
 
