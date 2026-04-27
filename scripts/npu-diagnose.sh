@@ -168,8 +168,19 @@ stage_serve_minilm() {
 }
 EOF
 
-  # `timeout` SIGKILLs after 30 s; podman run inherits and the container exits.
-  timeout 30 sudo podman run --rm -i \
+  echo "--- generated graph.pbtxt (path lines OVMS will try to resolve):"
+  sudo grep -E 'graph_path|target_device|model_path|servable_name' \
+    "$TEST_MODELS_DIR/sentence-transformers/all-MiniLM-L6-v2/graph.pbtxt" 2>/dev/null \
+    | head -10
+  echo
+  echo "--- on-disk model files (must match what graph.pbtxt references):"
+  sudo find "$TEST_MODELS_DIR/sentence-transformers/all-MiniLM-L6-v2" -maxdepth 3 \
+    \( -name '*.xml' -o -name '*.bin' -o -name 'graph.pbtxt' \) 2>/dev/null
+  echo
+  echo "--- OVMS startup (full last 80 lines, no grep):"
+
+  # `timeout` SIGKILLs after 25 s; podman run inherits and the container exits.
+  timeout 25 sudo podman run --rm -i \
     --device=/dev/accel/accel0 \
     --group-add="$RENDER_GID" \
     --group-add="$VIDEO_GID" \
@@ -180,9 +191,7 @@ EOF
     "$OVMS_IMAGE" \
     --rest_port 8000 \
     --config_path /models/config.json \
-    --log_level DEBUG 2>&1 \
-  | grep --line-buffered -iE 'available devices|state changed|cannot compile|target_device|compile model|fallback|npu|vcl_serializer' \
-  | head -50
+    --log_level DEBUG 2>&1 | tail -80
   echo
   echo "(timeout reached or container exited)"
 }
