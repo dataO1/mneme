@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# NPU diagnostic harness for mneme. Bisects "is the NPU working at all" vs
+# "is the bge-base model the problem". Run individual stages with the first
+# argument, or no args to run all three in order.
+#
+# Usage:
+#   ./scripts/npu-diagnose.sh           # run all stages
+#   ./scripts/npu-diagnose.sh device    # 1: probe NPU plugin from container
+#   ./scripts/npu-diagnose.sh compile   # 2: compile + run a trivial model
+#   ./scripts/npu-diagnose.sh minilm    # 3: try all-MiniLM-L6-v2 on NPU
+#   ./scripts/npu-diagnose.sh debug     # 4: re-serve current model with debug logs
+#
+# Requires: rootful podman, /dev/accel/accel0, render+video groups on host.
+
+set -euo pipefail
+
+OVMS_IMAGE="${OVMS_IMAGE:-openvino/model_server:2026.0-gpu}"
+RENDER_GID="$(getent group render | cut -d: -f3)"
+VIDEO_GID="$(getent group video  | cut -d: -f3)"
+TEST_MODELS_DIR="${TEST_MODELS_DIR:-/tmp/mneme-npu-test}"
+
+if [ -z "$RENDER_GID" ] || [ -z "$VIDEO_GID" ]; then
+  echo "ERROR: render or video group not in /etc/group" >&2
+  exit 2
+fi
+
+if [ ! -c /dev/accel/accel0 ]; then
+  echo "ERROR: /dev/accel/accel0 missing — intel_vpu driver not loaded?" >&2
+  exit 2
+fi
+
+# Common podman flags for NPU passthrough.
+podman_npu() {
+  sudo podman run --rm \
+    --device=/dev/accel/accel0 \
+    --group-add="$RENDER_GID" \
+    --group-add="$VIDEO_GID" \
+    --user=0:0 \
+    "$@"
+}
+
+stage_device() {
+  echo "=== [1/3] NPU plugin probe ==="
+  echo "Expecting 'Devices: [...,NPU,...]' and a non-empty FULL_DEVICE_NAME."
+  echo
+  podman_npu \
+    --entrypoint /bin/bash \
+    "$OVMS_IMAGE" \
+    -c '
+python3 - <<PY
+import openvino as ov
+core = ov.Core()
+print("Devices:", core.available_devices)
+if "NPU" in core.available_devices:
+    print("NPU full name:", core.get_property("NPU", "FULL_DEVICE_NAME"))
+    try:
+        print("NPU driver version:", core.get_property("NPU", "NPU_DRIVER_VERSION"))
+    except Exception as e:
+        print("NPU driver version: <unavailable>", e)
+else:
+    print("FAIL: NPU not in available devices — plugin or device passthrough is broken.")
+PY'
+  echo
+}
+
+stage_compile() {
+  echo "=== [2/3] Trivial-model compile + inference on NPU ==="
+  echo "Expecting 'compiled on NPU OK' and 'inference shape: (1, 32)'."
+  echo
+  podman_npu \
+    --entrypoint /bin/bash \
+    "$OVMS_IMAGE" \
+    -c '
+python3 - <<PY
+import numpy as np
+import openvino as ov
+import openvino.runtime.opset12 as ops
+
+# 1-op MatMul, fully static shapes. If this fails, the NPU compiler is broken
+# in this image build (or the silicon does not support whatever fundamental
+# op makes a MatMul work).
+inp = ops.parameter([1, 32], dtype=np.float32, name="x")
+w   = ops.constant(np.random.randn(32, 32).astype(np.float32))
+out = ops.matmul(inp, w, transpose_a=False, transpose_b=False)
+model = ov.Model([out], [inp], "tiny")
+
+core = ov.Core()
+compiled = core.compile_model(model, "NPU")
+print("compiled on NPU OK")
+
+result = compiled([np.random.randn(1, 32).astype(np.float32)])
+print("inference shape:", result[compiled.output(0)].shape)
+PY'
+  echo
+}
+
+stage_minilm() {
+  echo "=== [3/3] Try all-MiniLM-L6-v2 on NPU (smaller embed model than bge-base) ==="
+  echo "Expecting 'Model: ... downloaded to ...' and a graph.pbtxt write,"
+  echo "no 'Cannot compile model into target device'."
+  echo
+  mkdir -p "$TEST_MODELS_DIR"
+  chmod 777 "$TEST_MODELS_DIR"
+
+  podman_npu \
+    -v "$TEST_MODELS_DIR":/models:rw \
+    "$OVMS_IMAGE" \
+    --pull \
+    --model_repository_path /models \
+    --source_model sentence-transformers/all-MiniLM-L6-v2 \
+    --task embeddings \
+    --pooling MEAN \
+    --target_device NPU || {
+      echo
+      echo "--- minilm pull failed; rerun with target_device CPU to confirm pull itself works:"
+      podman_npu \
+        -v "$TEST_MODELS_DIR":/models:rw \
+        "$OVMS_IMAGE" \
+        --pull \
+        --model_repository_path /models \
+        --source_model sentence-transformers/all-MiniLM-L6-v2 \
+        --task embeddings --pooling MEAN \
+        --target_device CPU
+    }
+  echo
+}
+
+stage_debug() {
+  echo "=== [4] Re-serve current bge-base config at debug log level ==="
+  echo "Watch for the full NPU compile error chain. Ctrl-C to stop."
+  echo "(This binds 8001:8000 so it doesn't clash with the live mneme OVMS.)"
+  echo
+  podman_npu \
+    -v /var/lib/mneme/ovms-models:/models:ro \
+    -p 127.0.0.1:8001:8000 \
+    "$OVMS_IMAGE" \
+    --rest_port 8000 \
+    --config_path /models/config.json \
+    --log_level DEBUG
+}
+
+case "${1:-all}" in
+  device)  stage_device ;;
+  compile) stage_compile ;;
+  minilm)  stage_minilm ;;
+  debug)   stage_debug ;;
+  all)     stage_device; stage_compile; stage_minilm ;;
+  *)
+    echo "Usage: $0 [device|compile|minilm|debug|all]" >&2
+    exit 1
+    ;;
+esac
