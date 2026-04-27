@@ -51,7 +51,9 @@ let
 
   # Bootstrap script: idempotently builds a venv at $VENV using upstream's
   # install_deps.sh logic, then installs the project in editable mode.
-  # Runs as ExecStartPre. Needs network on first invocation.
+  # Runs as ExecStartPre. Needs network on first invocation. The stamp
+  # combines the source rev with the bootstrap derivation hash, so any
+  # change to the bootstrap script auto-invalidates the venv.
   bootstrap = pkgs.writeShellApplication {
     name = "mneme-vault-mcp-bootstrap";
     runtimeInputs = [ python pkgs.gnused pkgs.coreutils ];
@@ -60,9 +62,10 @@ let
       VENV="$1"
       SRC_RO="${vaultMcpSrc}/share/vault-mcp"
       WORK="${cfg.stateDir}/vault-mcp/build"
+      STAMP="${vaultMcpSrc.version}+bootstrap=$(basename "$0")"
 
       if [ -x "$VENV/bin/vault-mcp" ] && [ -f "$VENV/.mneme-rev" ] \
-         && [ "$(cat "$VENV/.mneme-rev")" = "${vaultMcpSrc.version}" ]; then
+         && [ "$(cat "$VENV/.mneme-rev")" = "$STAMP" ]; then
         exit 0
       fi
 
@@ -93,7 +96,7 @@ let
       # Project + remaining deps.
       "$VENV/bin/pip" install "$WORK"
 
-      echo "${vaultMcpSrc.version}" > "$VENV/.mneme-rev"
+      echo "$STAMP" > "$VENV/.mneme-rev"
       echo "[mneme] vault-mcp venv ready."
     '';
   };

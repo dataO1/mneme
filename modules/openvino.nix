@@ -26,6 +26,9 @@ let
         if [ ! -x "$VENV/bin/optimum-cli" ]; then
           ${pkgs.python311}/bin/python -m venv "$VENV"
           "$VENV/bin/pip" install --upgrade pip wheel
+          # Pre-install CPU-only torch so optimum's transitive deps don't
+          # pull in 3+ GB of CUDA wheels.
+          "$VENV/bin/pip" install --index-url https://download.pytorch.org/whl/cpu torch
           "$VENV/bin/pip" install 'optimum[openvino]>=1.20'
         fi
         mkdir -p "$TARGET/1"
