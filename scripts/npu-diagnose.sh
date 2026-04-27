@@ -208,7 +208,12 @@ stage_static_bge() {
     --entrypoint /bin/bash \
     -e HF_HOME=/tmp/hf-cache \
     "$OV_DEV_IMAGE" \
-    -lc 'python3 - <<PY
+    -lc '
+set -e
+echo "Installing optimum[openvino] (one-shot, in-container)..."
+pip install --quiet --no-warn-script-location "optimum[openvino]>=1.20" "openvino-tokenizers"
+
+python3 - <<PY
 import subprocess, sys
 import numpy as np
 import openvino as ov
