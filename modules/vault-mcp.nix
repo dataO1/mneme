@@ -31,7 +31,9 @@ let
       })
       cfg.indexDirectories);
 
-  appToml = pkgs.writeText "vault-mcp-app.toml" ''
+  # vault-mcp's loader does `open(os.path.join(config_path, "app.toml"))`,
+  # so --config must point at a *directory* containing app.toml.
+  appConfigDir = pkgs.writeTextDir "app.toml" ''
     [server]
     host = "127.0.0.1"
     port = ${toString cfg.ports.mcp}
@@ -125,7 +127,7 @@ in
         User = cfg.user;
         Group = cfg.group;
         ExecStartPre = "${bootstrap}/bin/mneme-vault-mcp-bootstrap ${cfg.stateDir}/vault-mcp/venv";
-        ExecStart = "${cfg.stateDir}/vault-mcp/venv/bin/vault-mcp --config ${appToml}";
+        ExecStart = "${cfg.stateDir}/vault-mcp/venv/bin/vault-mcp --config ${appConfigDir}";
         Restart = "on-failure";
         RestartSec = 5;
         # First-run venv build can take a while.

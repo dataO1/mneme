@@ -30,7 +30,10 @@ let
       TARGET="$MODELS_DIR/$SAFE_NAME"
       VENV="$MODELS_DIR/.export-venv"
 
-      if [ ! -d "$TARGET/1" ]; then
+      # Use a real sentinel (the IR file) so a partial/aborted previous export
+      # doesn't trick us into skipping the work.
+      if [ ! -f "$TARGET/1/openvino_model.xml" ]; then
+        rm -rf "$TARGET/1"
         echo "[mneme-ovms-init] Exporting $MODEL_NAME via optimum-intel..."
         if [ ! -x "$VENV/bin/optimum-cli" ]; then
           ${pkgs.python311}/bin/python -m venv "$VENV"
