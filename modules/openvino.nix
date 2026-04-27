@@ -73,7 +73,29 @@ let
     from openvino_tokenizers import convert_tokenizer
     from transformers import AutoTokenizer
     hf_tok = AutoTokenizer.from_pretrained(MODEL, trust_remote_code=True)
-    ov_tok, ov_detok = convert_tokenizer(hf_tok, with_detokenizer=True)
+    # Force the tokenizer's default max_length so the converted OV tokenizer
+    # bakes padding to that shape. NPU 3 needs the model + every input
+    # tensor at compile-time-known shapes; without this, short user inputs
+    # become e.g. [1, 7] and the EmbeddingsCalculatorOV's RET_CHECK fails
+    # (embeddings_calculator_ov.cc:384) when feeding the static [1, SEQ_LEN]
+    # model.
+    hf_tok.model_max_length = SEQ_LEN
+    # Try the modern flag name first; fall back to older parameter sets.
+    for kwargs in [
+        dict(with_detokenizer=True, use_max_padding=True),
+        dict(with_detokenizer=True, max_length=SEQ_LEN, use_max_padding=True),
+        dict(with_detokenizer=True, max_length=SEQ_LEN, pad_to_max_length=True, truncation=True),
+        dict(with_detokenizer=True),  # last resort
+    ]:
+        try:
+            ov_tok, ov_detok = convert_tokenizer(hf_tok, **kwargs)
+            print(f"  convert_tokenizer kwargs that worked: {sorted(kwargs)}")
+            break
+        except TypeError as e:
+            print(f"  convert_tokenizer rejected {sorted(kwargs)}: {e}")
+            continue
+    else:
+        raise RuntimeError("no convert_tokenizer parameter set succeeded")
     ov.save_model(ov_tok,   str(EMB / "openvino_tokenizer.xml"))
     ov.save_model(ov_detok, str(EMB / "openvino_detokenizer.xml"))
 
@@ -94,7 +116,11 @@ let
         "        [type.googleapis.com / mediapipe.EmbeddingsCalculatorOVOptions]: {\n"
         "            models_path: \"./\",\n"
         "            normalize_embeddings: true,\n"
-        "            truncate: false,\n"
+        # truncate=true: tells the calculator to clip / pad inputs to the
+        # model's static seq_len. Required when the underlying model has
+        # baked-static shapes (NPU 3 requirement). With dynamic-shape models
+        # (OVMS's pre-converted IRs) this would normally be false.
+        "            truncate: true,\n"
         f"            pooling: {POOLING},\n"
         f"            target_device: \"{DEVICE}\",\n"
         "            plugin_config: '{\"NUM_STREAMS\":\"1\"}',\n"
