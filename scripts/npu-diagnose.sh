@@ -39,7 +39,7 @@ fi
 # (the openvino dev image sets WORKDIR=/opt/intel/openvino, and overlayfs
 # on this storage refuses to mkdir over the existing dir at run time).
 podman_npu() {
-  sudo podman run --rm \
+  sudo podman run --rm -i \
     --device=/dev/accel/accel0 \
     --group-add="$RENDER_GID" \
     --group-add="$VIDEO_GID" \
