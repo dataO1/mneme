@@ -41,7 +41,7 @@ let
   # is a tree of symlinks under $FARM/<basename>/... pointing at originals.
   buildSourceScript = pkgs.writeShellApplication {
     name = "mneme-build-source";
-    runtimeInputs = [ pkgs.coreutils pkgs.findutils pkgs.git ];
+    runtimeInputs = [ pkgs.coreutils pkgs.fd pkgs.git ];
     text = ''
       set -euo pipefail
       FARM="$1"
@@ -49,12 +49,18 @@ let
 
       EXCLUDES=( ${lib.escapeShellArgs cfg.excludePatterns} )
 
-      # Build a -name <p> -o -name <p2> ... expression for find -prune.
-      PRUNE=()
+      # fd takes one --exclude per pattern.
+      FD_EXCLUDES=()
       for p in "''${EXCLUDES[@]}"; do
-        if [ ''${#PRUNE[@]} -gt 0 ]; then PRUNE+=( -o ); fi
-        PRUNE+=( -name "$p" )
+        FD_EXCLUDES+=( --exclude "$p" )
       done
+
+      progress() {
+        local n="$1" src="$2"
+        if [ $((n % 500)) -eq 0 ]; then
+          echo "[mneme-build-source]   ... $n files from $src"
+        fi
+      }
 
       rm -rf "$FARM"
       mkdir -p "$FARM"
@@ -65,29 +71,32 @@ let
         name="$(basename "$src")"
         dest="$FARM/$name"
         mkdir -p "$dest"
+        n=0
 
         if [ -d "$src/.git" ]; then
           echo "[mneme-build-source] $src is a git repo — using git ls-files"
-          n=0
           while IFS= read -r -d "" f; do
             target="$dest/$f"
             mkdir -p "$(dirname "$target")"
             ln -sfn "$src/$f" "$target"
             n=$((n + 1))
+            progress "$n" "$src"
           done < <(cd "$src" && git ls-files -z)
-          echo "[mneme-build-source]   $n files linked from $src"
         else
-          echo "[mneme-build-source] $src — pruning excludes via find"
-          n=0
+          echo "[mneme-build-source] $src — fd walk with excludes"
+          # --hidden so dotfiles are visible; --no-ignore so we ignore any
+          # ambient .gitignore (we control filtering via EXCLUDES). --type f
+          # gets only regular files. -0 = NUL-separated.
           while IFS= read -r -d "" f; do
             rel="''${f#"$src"/}"
             target="$dest/$rel"
             mkdir -p "$(dirname "$target")"
             ln -sfn "$f" "$target"
             n=$((n + 1))
-          done < <(find "$src" \( "''${PRUNE[@]}" \) -prune -o -type f -print0)
-          echo "[mneme-build-source]   $n files linked from $src"
+            progress "$n" "$src"
+          done < <(fd --hidden --no-ignore --type f -0 "''${FD_EXCLUDES[@]}" . "$src")
         fi
+        echo "[mneme-build-source]   $n files linked from $src"
         total=$((total + n))
       done
 
@@ -181,6 +190,36 @@ let
 in
 {
   config = lib.mkIf cfg.enable {
+    # Farm build runs decoupled from nixos-rebuild and from vault-mcp itself:
+    # a timer fires shortly after boot and then every 30 min. vault-mcp's
+    # file-watcher picks up the symlinks as they appear. First-boot effect:
+    # the index is empty for ~30 s, then fills in. Avoids the multi-minute
+    # ExecStartPre that was making `nixos-rebuild switch` look hung.
+    systemd.services."mneme-source-build" = lib.mkIf useFarm {
+      description = "mneme: build symlink farm for vault-mcp";
+      serviceConfig = {
+        Type = "oneshot";
+        User = cfg.user;
+        Group = cfg.group;
+        ExecStart = "${buildSourceScript}/bin/mneme-build-source ${farmDir} ${
+          lib.escapeShellArgs (map toString cfg.indexDirectories)
+        }";
+        TimeoutStartSec = "30min";
+        Nice = 10;
+        IOSchedulingClass = "idle";
+      };
+    };
+
+    systemd.timers."mneme-source-build" = lib.mkIf useFarm {
+      description = "Periodic mneme symlink farm rebuild";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "30s";
+        OnUnitActiveSec = "30min";
+        Persistent = true;
+      };
+    };
+
     systemd.services."mneme-vault-mcp" = {
       description = "mneme: vault-mcp MCP server";
       wantedBy = [ "multi-user.target" ];
@@ -194,12 +233,7 @@ in
         Type = "simple";
         User = cfg.user;
         Group = cfg.group;
-        ExecStartPre =
-          (lib.optional useFarm
-            "${buildSourceScript}/bin/mneme-build-source ${farmDir} ${
-              lib.escapeShellArgs (map toString cfg.indexDirectories)
-            }")
-          ++ [ "${bootstrap}/bin/mneme-vault-mcp-bootstrap ${cfg.stateDir}/vault-mcp/venv" ];
+        ExecStartPre = "${bootstrap}/bin/mneme-vault-mcp-bootstrap ${cfg.stateDir}/vault-mcp/venv";
         ExecStart = "${cfg.stateDir}/vault-mcp/venv/bin/vault-mcp --config ${appConfigDir}";
         Restart = "on-failure";
         RestartSec = 5;

@@ -156,6 +156,9 @@ in
     systemd.tmpfiles.rules = [
       "d ${cfg.stateDir} 0750 ${cfg.user} ${cfg.group} -"
       "d ${cfg.stateDir}/ovms-models 0750 ${cfg.user} ${cfg.group} -"
+      # Pre-create the farm dir so vault-mcp doesn't choke on a missing
+      # vault_dir before the source-build timer fires (~30 s after boot).
+      "d ${cfg.stateDir}/vault-mcp/source 0750 ${cfg.user} ${cfg.group} -"
       # Recursive chown: when cfg.user changes (e.g. mneme -> data01) the
       # existing tree must be re-owned, otherwise ChromaDB hits 'attempt to
       # write a readonly database'.
