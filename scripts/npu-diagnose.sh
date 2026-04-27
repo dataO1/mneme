@@ -365,6 +365,122 @@ PY'
   echo
 }
 
+stage_static_search() {
+  echo "=== [6] Multi-model NPU search ==="
+  echo "Probes a curated candidate list. For each: export to OpenVINO IR,"
+  echo "reshape inputs to a static max-context, compile on NPU, smoke-test."
+  echo "Prints a summary table at the end showing which models survived."
+  echo
+  echo "Candidates (long-context first, then bigger BERTs as quality fallback):"
+  echo "  1. nomic-ai/modernbert-embed-base       (149M, 8192 ctx, ModernBERT)"
+  echo "  2. answerdotai/ModernBERT-base          (149M, 8192 ctx, ModernBERT)"
+  echo "  3. intfloat/e5-base-v2                  (110M,  512 ctx, BERT)"
+  echo "  4. BAAI/bge-large-en-v1.5               (335M,  512 ctx, BERT)"
+  echo "  5. mixedbread-ai/mxbai-embed-large-v1   (335M,  512 ctx, BERT)"
+  echo "  6. intfloat/multilingual-e5-base        (278M,  512 ctx, XLM-RoBERTa)"
+  echo
+
+  podman_npu \
+    --entrypoint /bin/bash \
+    -e HF_HOME=/tmp/hf-cache \
+    "$OV_DEV_IMAGE" \
+    -lc '
+set -e
+echo "Installing optimum[openvino] (one-shot, in-container)..."
+pip install --quiet --no-warn-script-location \
+  "optimum[openvino]>=1.20" "openvino-tokenizers"
+
+python3 - <<PY
+import os, subprocess, traceback
+import numpy as np
+import openvino as ov
+
+# (model, target_seq_len). target_seq_len = the largest static shape we
+# bother trying for that model. Capped at 2048 to keep NPU memory in budget.
+CANDIDATES = [
+    ("nomic-ai/modernbert-embed-base",       2048),
+    ("answerdotai/ModernBERT-base",          2048),
+    ("intfloat/e5-base-v2",                   512),
+    ("BAAI/bge-large-en-v1.5",                512),
+    ("mixedbread-ai/mxbai-embed-large-v1",    512),
+    ("intfloat/multilingual-e5-base",         512),
+]
+
+results = []
+core = ov.Core()
+
+for model_id, target_seq in CANDIDATES:
+    print(f"\n========== {model_id} (target_seq={target_seq}) ==========")
+    safe = model_id.replace("/", "_")
+    out_dir = f"/tmp/search-{safe}"
+    try:
+        subprocess.check_call([
+            "optimum-cli", "export", "openvino",
+            "--model", model_id,
+            "--task", "feature-extraction",
+            "--weight-format", "int8",
+            "--library", "transformers",
+            "--trust-remote-code",
+            out_dir,
+        ])
+    except Exception as e:
+        print(f"  ✗ export failed: {type(e).__name__}: {str(e)[:200]}")
+        results.append((model_id, target_seq, "export-failed", None))
+        continue
+
+    # Try target_seq, fall back to 512 if that fails to compile.
+    compiled_at = None
+    last_err = None
+    for seq_len in (target_seq, 512) if target_seq != 512 else (512,):
+        try:
+            model = core.read_model(f"{out_dir}/openvino_model.xml")
+            model.reshape({p.get_any_name(): [1, seq_len] for p in model.inputs})
+            compiled = core.compile_model(model, "NPU")
+            # Smoke inference.
+            inputs = {}
+            for p in model.inputs:
+                n = p.get_any_name()
+                dtype = np.int64 if ("ids" in n or "mask" in n) else np.float32
+                inputs[n] = np.zeros([1, seq_len], dtype=dtype)
+            out = compiled(inputs)
+            shapes = [list(v.shape) for v in out.values()]
+            print(f"  ✓ seq_len={seq_len}: compiled + inferred OK; shapes={shapes}")
+            compiled_at = seq_len
+            break
+        except Exception as e:
+            print(f"  ✗ seq_len={seq_len}: {type(e).__name__}: {str(e)[:240]}")
+            last_err = str(e)[:240]
+
+    if compiled_at:
+        results.append((model_id, compiled_at, "ok", None))
+    else:
+        results.append((model_id, target_seq, "compile-failed", last_err))
+
+print("\n" + "=" * 78)
+print("SUMMARY")
+print("=" * 78)
+print(f"{'model':<45} {'seq':>6}  {'status':<18}")
+print("-" * 78)
+for model_id, seq, status, _ in results:
+    print(f"{model_id:<45} {seq:>6}  {status:<18}")
+print()
+
+oks = [r for r in results if r[2] == "ok"]
+if oks:
+    print("WORKING ON NPU:")
+    for r in oks:
+        print(f"  {r[0]} @ seq_len={r[1]}")
+    print()
+    print("Pick: largest context that compiled, then by quality.")
+    print("If a ModernBERT variant survived, that is the winner (long ctx +")
+    print("modern training). Otherwise pick the bigger BERT for quality")
+    print("(bge-large > mxbai-large > e5-base-v2 > bge-base).")
+else:
+    print("Nothing else compiled. Stick with bge-base @ [1, 512] (NPU-3).")
+PY'
+  echo
+}
+
 stage_debug() {
   echo "=== [4] Re-serve current bge-base config at debug log level ==="
   echo "Watch for the full NPU compile error chain. Ctrl-C to stop."
@@ -386,11 +502,13 @@ case "${1:-all}" in
   serve-minilm)  stage_serve_minilm ;;
   static-bge)    stage_static_bge ;;
   static-long)   stage_static_long ;;
+  static-search) stage_static_search ;;
   debug)         stage_debug ;;
   all)           stage_device; stage_compile; stage_minilm; stage_serve_minilm; stage_static_bge; stage_static_long ;;
   *)
-    echo "Usage: $0 [device|compile|minilm|serve-minilm|static-bge|static-long|debug|all]" >&2
-    echo "  static-long: override model with MODEL=<hf/repo> env var" >&2
+    echo "Usage: $0 [device|compile|minilm|serve-minilm|static-bge|static-long|static-search|debug|all]" >&2
+    echo "  static-long:   override model with MODEL=<hf/repo> env var" >&2
+    echo "  static-search: probe a curated candidate list, print verdict table" >&2
     exit 1
     ;;
 esac
