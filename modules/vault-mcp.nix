@@ -231,12 +231,14 @@ in
       description = "Periodic mneme symlink farm rebuild";
       wantedBy = [ "timers.target" ];
       timerConfig = {
-        # Fire as soon as the timer loads (after switch-to-configuration
-        # has returned, so nixos-rebuild doesn't block on the walk). Then
-        # again every 30 min. Nice=10 + IOSchedulingClass=idle keeps the
-        # build out of the way of foreground work.
-        OnActiveSec = "0";
-        OnUnitActiveSec = "30min";
+        # Wall-clock schedule: every 30 min at :00 and :30. Persistent=true
+        # means missed fires (system off) catch up on next boot. We also
+        # set OnBootSec so a fresh boot doesn't have to wait for the next
+        # half-hour mark. Avoid OnActiveSec — it doesn't re-trigger when a
+        # nixos-rebuild reloads an already-active timer, which is exactly
+        # the reload-and-stay-empty bug we hit.
+        OnBootSec = "10s";
+        OnCalendar = "*:0/30";
         Persistent = true;
       };
     };
