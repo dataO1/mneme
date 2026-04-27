@@ -102,14 +102,22 @@ in
 
     requiredExts = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [ ".md" ".txt" ".rst" ".org" ".pdf" ".markdown" ];
+      default = [
+        ".md" ".markdown" ".txt" ".rst" ".org"
+        ".pdf"
+        ".docx" ".pptx" ".xlsx"
+        ".html" ".htm" ".csv"
+        ".epub"
+      ];
       description = ''
         File extensions vault-mcp's SimpleDirectoryReader is allowed to
-        load. The bootstrap patches the bare `SimpleDirectoryReader(
-        input_files=...)` call site to pass these as `required_exts`,
-        which upstream forgot to do — without that, llama-index inspects
-        any extension it doesn't recognise (audio, video, ...) and demands
-        extra dependencies (e.g. whisper).
+        load. The bootstrap also installs the matching extractor packages
+        (docx2txt, python-pptx, openpyxl, ebooklib) into the venv so that
+        every extension here actually works at runtime.
+
+        Note: SimpleDirectoryReader ignores required_exts when constructed
+        with input_files=, so we *also* prune at the farm level via
+        excludePatterns to keep unwanted formats from reaching the loader.
       '';
     };
 
