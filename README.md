@@ -68,16 +68,18 @@ Connect Claude Code (or any MCP client) to `http://127.0.0.1:8765` (or pipe via
 
 ## Status / caveats
 
-This is a young project. Expected rough edges:
-
-- **`pkgs/vault-mcp.nix`** uses `lib.fakeHash` and a guessed dependency set.
-  First `nix build` will print the real hash; substitute it, then iterate on
-  `propagatedBuildInputs` until the build succeeds. The module exposes the
-  package as overridable so you can swap in a poetry2nix build without
-  touching the modules.
-- **OVMS NPU support for embeddings is a preview feature.** If init fails to
-  export the model with a static shape, set the model manually and skip
-  `mneme-ovms-init`.
+- **vault-mcp uses a runtime venv, not a pure Nix build.** Upstream pins
+  `torch+cpu` from a separate index and ships `mlx-lm` as a hard dep
+  (Apple-Silicon-only). Packaging that in pure Nix would mean forking and
+  patching dozens of dependencies. Instead, the source tree is store-pinned
+  via `fetchFromGitHub`, and the systemd service runs an `ExecStartPre`
+  that builds a venv at `${stateDir}/vault-mcp/venv` on first start using
+  upstream's own install path (with `mlx-lm` stripped). First start needs
+  network and takes 5–10 minutes. Subsequent starts are instant. The
+  bootstrap re-runs automatically when the source rev changes.
+- **OVMS NPU support for embeddings is a preview feature.** If the init
+  oneshot fails to export the model with a static shape, export manually
+  into `${stateDir}/ovms-models/<model>/1/` and disable `mneme-ovms-init`.
 - **No firewall opening by default.** Set `services.mneme.openFirewall = true`
   only if you understand what you're exposing.
 
