@@ -75,6 +75,13 @@ let
       # mlx-lm is Apple-Silicon-only; remove it before installing.
       sed -i '/^[[:space:]]*"mlx-lm/d' "$WORK/pyproject.toml"
 
+      # Upstream's pyproject only packages `components` and `shared` into the
+      # wheel, but the entrypoint script does `from vault_mcp.main import run`.
+      # Add the missing top-level packages so the install is actually usable.
+      sed -i \
+        's|^packages = \["components", "shared"\]|packages = ["components", "shared", "vault_mcp", "plugins"]|' \
+        "$WORK/pyproject.toml"
+
       ${python}/bin/python -m venv "$VENV"
       "$VENV/bin/pip" install --upgrade pip wheel
 

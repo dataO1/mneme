@@ -4,37 +4,36 @@
 let
   cfg = config.services.mneme;
 
-  # OpenVINO Model Server with NPU support.
-  # Image tag pinned to a known release; bump when validating against newer OVMS.
-  ovmsImage = "openvino/model_server:2026.0";
+  # NPU support requires the -gpu variant; the plain image is CPU-only.
+  ovmsImage = "openvino/model_server:2026.0-gpu";
 
-  # Static script that, on first run, exports the configured BGE model to OpenVINO IR
-  # with a static input shape (NPU requirement) and writes an OVMS config.
-  modelInitScript = pkgs.writeShellApplication {
+  # Init runs on the host: builds a tiny venv, runs optimum-cli to export
+  # the embedding model to OpenVINO IR, then writes the OVMS config. Mirrors
+  # the vault-mcp bootstrap pattern (network at first start, idempotent).
+  initScript = pkgs.writeShellApplication {
     name = "mneme-ovms-init";
-    runtimeInputs = with pkgs; [ podman python3 ];
+    runtimeInputs = [ pkgs.python311 pkgs.coreutils ];
     text = ''
       set -euo pipefail
       MODELS_DIR="${cfg.stateDir}/ovms-models"
       MODEL_NAME="${cfg.embeddingModel}"
-      # Sanitize for filesystem use
       SAFE_NAME="$(echo "$MODEL_NAME" | tr '/' '_')"
       TARGET="$MODELS_DIR/$SAFE_NAME"
+      VENV="$MODELS_DIR/.export-venv"
 
       if [ ! -d "$TARGET/1" ]; then
-        echo "[mneme] Exporting $MODEL_NAME to OpenVINO IR (NPU static shape) ..."
+        echo "[mneme-ovms-init] Exporting $MODEL_NAME via optimum-intel..."
+        if [ ! -x "$VENV/bin/optimum-cli" ]; then
+          ${pkgs.python311}/bin/python -m venv "$VENV"
+          "$VENV/bin/pip" install --upgrade pip wheel
+          "$VENV/bin/pip" install 'optimum[openvino]>=1.20'
+        fi
         mkdir -p "$TARGET/1"
-        # Use the OVMS image's bundled optimum-cli to export with a fixed sequence length.
-        ${pkgs.podman}/bin/podman run --rm \
-          -v "$TARGET/1":/out \
-          --entrypoint /bin/bash \
-          ${ovmsImage} \
-          -lc "pip install --quiet 'optimum[openvino]' && \
-               optimum-cli export openvino \
-                 --model '$MODEL_NAME' \
-                 --task feature-extraction \
-                 --weight-format int8 \
-                 /out"
+        "$VENV/bin/optimum-cli" export openvino \
+          --model "$MODEL_NAME" \
+          --task feature-extraction \
+          --weight-format int8 \
+          "$TARGET/1"
       fi
 
       cat > "$MODELS_DIR/config.json" <<EOF
@@ -50,6 +49,7 @@ let
         ]
       }
       EOF
+      echo "[mneme-ovms-init] OVMS config ready at $MODELS_DIR/config.json"
     '';
   };
 in
@@ -59,14 +59,17 @@ in
 
     systemd.services."mneme-ovms-init" = {
       description = "mneme: prepare OVMS embedding model";
-      wantedBy = [ "mneme-ovms.service" ];
-      before = [ "mneme-ovms.service" ];
+      wantedBy = [ "podman-mneme-ovms.service" ];
+      before = [ "podman-mneme-ovms.service" ];
+      wants = [ "network-online.target" ];
+      after = [ "network-online.target" ];
       serviceConfig = {
         Type = "oneshot";
         User = cfg.user;
         Group = cfg.group;
-        ExecStart = "${modelInitScript}/bin/mneme-ovms-init";
+        ExecStart = "${initScript}/bin/mneme-ovms-init";
         RemainAfterExit = true;
+        TimeoutStartSec = "20min";
       };
     };
 
@@ -82,10 +85,13 @@ in
         "--rest_port" "8000"
       ];
       extraOptions = [
-        # NPU device passthrough (intel_vpu exposes /dev/accel/accel0).
-        "--device=/dev/accel"
-        # Render group access for the NPU char device.
-        "--group-add=keep-groups"
+        # NPU device passthrough.
+        "--device=/dev/accel/accel0"
+        # Grant the in-container user the host's render group GID so it can
+        # open /dev/accel/accel0. Names are resolved against the host's
+        # /etc/group by podman.
+        "--group-add=render"
+        "--group-add=video"
       ];
     };
   };
