@@ -61,12 +61,14 @@ in
 
     embeddingModel = lib.mkOption {
       type = lib.types.str;
-      default = "OpenVINO/bge-small-en-v1.5-int8-ov";
+      default = "OpenVINO/bge-base-en-v1.5-int8-ov";
       description = ''
         HuggingFace repo of the embedding model. Use a pre-converted
-        OpenVINO IR (typically under the OpenVINO/ org) so OVMS can
-        deploy it directly without an export step. NPU prefers static
-        input shapes; INT8 IRs from the OpenVINO/ org tend to ship them.
+        OpenVINO IR (under the OpenVINO/ org) so OVMS can deploy it
+        directly without an export step. The default is the model the
+        OVMS docs use as a canonical example; bge-small is *not* in the
+        OpenVINO org, despite what the BAAI naming suggests.
+        NPU prefers static input shapes; INT8 IRs ship them.
       '';
     };
 
