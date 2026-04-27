@@ -172,6 +172,13 @@ let
         's|^packages = \["components", "shared"\]|packages = ["components", "shared", "vault_mcp", "plugins"]|' \
         "$WORK/pyproject.toml"
 
+      # Parallelise initial file loading. SimpleDirectoryReader.load_data()
+      # is single-threaded by default; pass num_workers so all cores get
+      # used during the initial scan of the symlink farm.
+      sed -i \
+        's|reader\.load_data()|reader.load_data(num_workers=${toString cfg.indexWorkers})|g' \
+        "$WORK/components/document_processing/document_loader.py"
+
       ${python}/bin/python -m venv "$VENV"
       "$VENV/bin/pip" install --upgrade pip wheel
 

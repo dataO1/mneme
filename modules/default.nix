@@ -93,6 +93,17 @@ in
       '';
     };
 
+    indexWorkers = lib.mkOption {
+      type = lib.types.int;
+      default = 16;
+      description = ''
+        Worker count for parallel file loading inside vault-mcp's
+        SimpleDirectoryReader. Upstream calls load_data() with no kwargs,
+        making the initial scan single-threaded. The bootstrap patches
+        the call site to pass num_workers=this. Set to 1 to disable.
+      '';
+    };
+
     embeddingDevice = lib.mkOption {
       type = lib.types.enum [ "CPU" "GPU" "NPU" "AUTO" ];
       default = "NPU";
