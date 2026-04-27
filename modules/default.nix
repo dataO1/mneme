@@ -17,12 +17,23 @@ in
     user = lib.mkOption {
       type = lib.types.str;
       default = "mneme";
-      description = "System user that owns mneme state.";
+      description = ''
+        User that runs vault-mcp and owns mneme state. Set this to your
+        login user (e.g. "alice") so vault-mcp can read your home directory
+        — the default synthetic "mneme" user has no access to drwx------
+        home dirs. When set to "mneme" (the default) a system user is
+        auto-created; any other value must already exist.
+      '';
     };
 
     group = lib.mkOption {
       type = lib.types.str;
-      default = "mneme";
+      default = "users";
+      description = ''
+        Group used for mneme state ownership. Defaults to "users" so the
+        run user (typically a normal login user) has access without extra
+        plumbing.
+      '';
     };
 
     stateDir = lib.mkOption {
@@ -50,8 +61,22 @@ in
 
     embeddingModel = lib.mkOption {
       type = lib.types.str;
-      default = "BAAI/bge-small-en-v1.5";
-      description = "Embedding model served by OpenVINO Model Server on the NPU.";
+      default = "OpenVINO/bge-small-en-v1.5-int8-ov";
+      description = ''
+        HuggingFace repo of the embedding model. Use a pre-converted
+        OpenVINO IR (typically under the OpenVINO/ org) so OVMS can
+        deploy it directly without an export step. NPU prefers static
+        input shapes; INT8 IRs from the OpenVINO/ org tend to ship them.
+      '';
+    };
+
+    embeddingDevice = lib.mkOption {
+      type = lib.types.enum [ "CPU" "GPU" "NPU" "AUTO" ];
+      default = "NPU";
+      description = ''
+        OpenVINO target device for embedding inference. Fall back to "CPU"
+        if the model fails to load on NPU (NPU requires static shapes).
+      '';
     };
 
     ports = {
@@ -85,15 +110,19 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    users.users.${cfg.user} = {
-      isSystemUser = true;
-      group = cfg.group;
-      home = cfg.stateDir;
-      createHome = true;
-      # NPU device access (intel_vpu exposes /dev/accel/accel0 via the render group)
-      extraGroups = [ "render" "video" ];
-    };
-    users.groups.${cfg.group} = { };
+    # Only auto-create the synthetic system user. Real login users must
+    # already exist; we just ensure they're in the render/video groups for
+    # NPU access (no-op if already present).
+    users.users.${cfg.user} = lib.mkMerge [
+      (lib.mkIf (cfg.user == "mneme") {
+        isSystemUser = true;
+        group = cfg.group;
+        home = cfg.stateDir;
+        createHome = true;
+      })
+      { extraGroups = [ "render" "video" ]; }
+    ];
+    users.groups.mneme = lib.mkIf (cfg.group == "mneme") { };
 
     # Pin render/video GIDs so the OVMS container's --group-add=<gid>
     # references stay correct. Conventional NixOS values; mkDefault means
