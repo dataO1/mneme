@@ -58,15 +58,22 @@ in
       qdrant = lib.mkOption {
         type = lib.types.port;
         default = 6333;
+        description = "Qdrant HTTP port (currently unused by vault-mcp; reserved).";
       };
       openvino = lib.mkOption {
         type = lib.types.port;
         default = 8000;
+        description = "OpenVINO Model Server REST endpoint (embeddings).";
+      };
+      api = lib.mkOption {
+        type = lib.types.port;
+        default = 8765;
+        description = "vault-mcp REST API port.";
       };
       mcp = lib.mkOption {
         type = lib.types.port;
-        default = 8765;
-        description = "vault-mcp HTTP/SSE port (stdio is also exposed via the CLI wrapper).";
+        default = 8766;
+        description = "vault-mcp MCP server port (separate from REST API).";
       };
     };
 

@@ -17,26 +17,29 @@ let
     openssl
   ]);
 
-  sources =
-    (lib.optional (cfg.obsidianVault != null) {
-      name = "obsidian";
-      type = "obsidian";
-      path = toString cfg.obsidianVault;
-    })
-    ++ (lib.imap0
-      (i: dir: {
-        name = "files-${toString i}";
-        type = "markdown";
-        path = toString dir;
-      })
-      cfg.indexDirectories);
+  # vault-mcp only supports a single source dir (paths.vault_dir) and a
+  # hardcoded ChromaDB backend — no [vector_store] / [[sources]]. Pick the
+  # vault: explicit obsidianVault wins, else the first indexDirectories entry.
+  vaultDir =
+    if cfg.obsidianVault != null then toString cfg.obsidianVault
+    else if cfg.indexDirectories != [ ] then toString (builtins.head cfg.indexDirectories)
+    else throw "services.mneme: set obsidianVault or at least one indexDirectories entry";
+
+  vaultType = if cfg.obsidianVault != null then "Obsidian" else "Standard";
 
   # vault-mcp's loader does `open(os.path.join(config_path, "app.toml"))`,
   # so --config must point at a *directory* containing app.toml.
   appConfigDir = pkgs.writeTextDir "app.toml" ''
+    [paths]
+    vault_dir = "${vaultDir}"
+    database_dir = "${cfg.stateDir}/vault-mcp/chroma_db"
+    data_dir = "${cfg.stateDir}/vault-mcp/data"
+    type = "${vaultType}"
+
     [server]
     host = "127.0.0.1"
-    port = ${toString cfg.ports.mcp}
+    api_port = ${toString cfg.ports.api}
+    mcp_port = ${toString cfg.ports.mcp}
 
     [embedding_model]
     provider = "openai_endpoint"
@@ -44,20 +47,14 @@ let
     endpoint_url = "http://127.0.0.1:${toString cfg.ports.openvino}/v1"
     api_key = "unused"
 
-    [vector_store]
-    provider = "qdrant"
-    url = "http://127.0.0.1:${toString cfg.ports.qdrant}"
-    collection = "mneme"
+    [retrieval]
+    # "static" avoids requiring a generation_model. Switch to "agentic" and
+    # add a [generation_model] block to enable LLM-mediated retrieval.
+    mode = "static"
 
-    [storage]
-    state_dir = "${cfg.stateDir}/vault-mcp"
-
-    [[sources]]
-    ${lib.concatMapStringsSep "\n\n[[sources]]\n" (s: ''
-      name = "${s.name}"
-      type = "${s.type}"
-      path = "${s.path}"
-    '') sources}
+    [watcher]
+    enabled = true
+    debounce_seconds = 2
   '';
 
   # Bootstrap script: idempotently builds a venv at $VENV using upstream's
@@ -117,8 +114,9 @@ in
     systemd.services."mneme-vault-mcp" = {
       description = "mneme: vault-mcp MCP server";
       wantedBy = [ "multi-user.target" ];
-      after = [ "network-online.target" "qdrant.service" "podman-mneme-ovms.service" ];
-      requires = [ "qdrant.service" ];
+      # vault-mcp uses ChromaDB locally (file-backed under chroma_db).
+      # It does not talk to Qdrant; ordering only requires OVMS + network.
+      after = [ "network-online.target" "podman-mneme-ovms.service" "mneme-ovms-init.service" ];
       wants = [ "network-online.target" ];
 
       environment.LD_LIBRARY_PATH = wheelLibPath;
