@@ -108,6 +108,7 @@ in
         ".docx" ".pptx" ".xlsx"
         ".html" ".htm" ".csv"
         ".epub"
+        ".ipynb"
       ];
       description = ''
         File extensions vault-mcp's SimpleDirectoryReader is allowed to

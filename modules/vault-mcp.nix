@@ -203,8 +203,8 @@ let
       # Extra extractors llama-index demands lazily for non-text formats.
       # Without these, reindex crashes on the first .docx / .pptx / etc.
       # docx2txt → .docx, python-pptx → .pptx, openpyxl → .xlsx,
-      # ebooklib → .epub. All small.
-      "$VENV/bin/pip" install docx2txt python-pptx openpyxl ebooklib
+      # ebooklib → .epub, nbconvert → .ipynb (Jupyter notebooks).
+      "$VENV/bin/pip" install docx2txt python-pptx openpyxl ebooklib nbconvert
 
       echo "$STAMP" > "$VENV/.mneme-rev"
       echo "[mneme] vault-mcp venv ready."
