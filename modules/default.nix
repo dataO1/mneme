@@ -72,6 +72,27 @@ in
       '';
     };
 
+    excludePatterns = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [
+        ".git" ".direnv" ".envrc"
+        ".cache" ".local" ".npm" ".pnpm-store" ".cargo" ".rustup"
+        ".gradle" ".m2" ".ivy2" ".gem" ".thumbnails"
+        "node_modules" "target" "build" "dist" "out"
+        "__pycache__" ".venv" "venv" ".tox"
+        ".next" ".nuxt" ".turbo" ".parcel-cache"
+        "result" "result-*"
+        ".DS_Store" ".trash" "Trash"
+      ];
+      description = ''
+        Directory/file names to prune when building the symlink farm that
+        vault-mcp indexes (find -name semantics, no globs). Source dirs
+        that are git repos use `git ls-files` instead, so .gitignore is
+        honoured automatically and this list only kicks in for non-repo
+        trees.
+      '';
+    };
+
     embeddingDevice = lib.mkOption {
       type = lib.types.enum [ "CPU" "GPU" "NPU" "AUTO" ];
       default = "NPU";

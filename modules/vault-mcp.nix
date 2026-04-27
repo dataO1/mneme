@@ -18,14 +18,82 @@ let
   ]);
 
   # vault-mcp only supports a single source dir (paths.vault_dir) and a
-  # hardcoded ChromaDB backend — no [vector_store] / [[sources]]. Pick the
-  # vault: explicit obsidianVault wins, else the first indexDirectories entry.
+  # hardcoded ChromaDB backend. Strategy:
+  #   - obsidianVault set → use it directly with type="Obsidian" (so the
+  #     llama-index Obsidian reader handles wikilinks/frontmatter). User
+  #     accepts whatever's in the vault tree as-is.
+  #   - else → build a symlink farm under stateDir from indexDirectories,
+  #     pruning excludePatterns and respecting .gitignore for git repos.
+  #     Point vault_dir at the farm. Multiple input dirs become subdirs of
+  #     the farm.
+  farmDir = "${cfg.stateDir}/vault-mcp/source";
+  useFarm = cfg.obsidianVault == null;
+
   vaultDir =
     if cfg.obsidianVault != null then toString cfg.obsidianVault
-    else if cfg.indexDirectories != [ ] then toString (builtins.head cfg.indexDirectories)
+    else if cfg.indexDirectories != [ ] then farmDir
     else throw "services.mneme: set obsidianVault or at least one indexDirectories entry";
 
   vaultType = if cfg.obsidianVault != null then "Obsidian" else "Standard";
+
+  # Symlink farm builder: walks each source dir, prunes excludePatterns,
+  # uses `git ls-files` inside git repos so .gitignore is honoured. Output
+  # is a tree of symlinks under $FARM/<basename>/... pointing at originals.
+  buildSourceScript = pkgs.writeShellApplication {
+    name = "mneme-build-source";
+    runtimeInputs = [ pkgs.coreutils pkgs.findutils pkgs.git ];
+    text = ''
+      set -euo pipefail
+      FARM="$1"
+      shift
+
+      EXCLUDES=( ${lib.escapeShellArgs cfg.excludePatterns} )
+
+      # Build a -name <p> -o -name <p2> ... expression for find -prune.
+      PRUNE=()
+      for p in "''${EXCLUDES[@]}"; do
+        if [ ''${#PRUNE[@]} -gt 0 ]; then PRUNE+=( -o ); fi
+        PRUNE+=( -name "$p" )
+      done
+
+      rm -rf "$FARM"
+      mkdir -p "$FARM"
+
+      total=0
+      for src in "$@"; do
+        [ -d "$src" ] || { echo "[mneme-build-source] skipping missing $src"; continue; }
+        name="$(basename "$src")"
+        dest="$FARM/$name"
+        mkdir -p "$dest"
+
+        if [ -d "$src/.git" ]; then
+          echo "[mneme-build-source] $src is a git repo — using git ls-files"
+          n=0
+          while IFS= read -r -d "" f; do
+            target="$dest/$f"
+            mkdir -p "$(dirname "$target")"
+            ln -sfn "$src/$f" "$target"
+            n=$((n + 1))
+          done < <(cd "$src" && git ls-files -z)
+          echo "[mneme-build-source]   $n files linked from $src"
+        else
+          echo "[mneme-build-source] $src — pruning excludes via find"
+          n=0
+          while IFS= read -r -d "" f; do
+            rel="''${f#"$src"/}"
+            target="$dest/$rel"
+            mkdir -p "$(dirname "$target")"
+            ln -sfn "$f" "$target"
+            n=$((n + 1))
+          done < <(find "$src" \( "''${PRUNE[@]}" \) -prune -o -type f -print0)
+          echo "[mneme-build-source]   $n files linked from $src"
+        fi
+        total=$((total + n))
+      done
+
+      echo "[mneme-build-source] total $total files in $FARM"
+    '';
+  };
 
   # vault-mcp's loader does `open(os.path.join(config_path, "app.toml"))`,
   # so --config must point at a *directory* containing app.toml.
@@ -126,7 +194,12 @@ in
         Type = "simple";
         User = cfg.user;
         Group = cfg.group;
-        ExecStartPre = "${bootstrap}/bin/mneme-vault-mcp-bootstrap ${cfg.stateDir}/vault-mcp/venv";
+        ExecStartPre =
+          (lib.optional useFarm
+            "${buildSourceScript}/bin/mneme-build-source ${farmDir} ${
+              lib.escapeShellArgs (map toString cfg.indexDirectories)
+            }")
+          ++ [ "${bootstrap}/bin/mneme-vault-mcp-bootstrap ${cfg.stateDir}/vault-mcp/venv" ];
         ExecStart = "${cfg.stateDir}/vault-mcp/venv/bin/vault-mcp --config ${appConfigDir}";
         Restart = "on-failure";
         RestartSec = 5;

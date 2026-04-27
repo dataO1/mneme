@@ -29,11 +29,15 @@ Without this, users have to choose between e.g. Notes and Documents.
 
 ## Other
 
-- Cleaner exclude story for the single-source case (vault-mcp has no glob
-  excludes; pointing at `~` pulls in `.cache`, `.git`, `node_modules`).
-  Options: build a symlink farm under stateDir from a user-curated include
-  list, or fork upstream to add an exclude list. Symlink farm is non-invasive
-  and easier to revert.
+- ~~Cleaner exclude story for the single-source case~~ **done.** Module now
+  builds a symlink farm under `${stateDir}/vault-mcp/source/` from
+  `indexDirectories`, pruning `excludePatterns` and using `git ls-files`
+  inside git repos so `.gitignore` is honoured. obsidianVault still bypasses
+  the farm so the Obsidian llama-index reader keeps wikilink/frontmatter
+  parsing.
+  Possible follow-ups: re-walk on a systemd timer (currently runs only at
+  service start), expose per-source `prefix_filter.allowed_prefixes`, allow
+  per-source `excludePatterns`.
 - Drop or hide Qdrant from the default config — vault-mcp doesn't use it.
   Keep behind an `services.mneme.qdrant.enable` toggle for future indexers.
 - Validate NPU is actually being used (not falling back to CPU). After
