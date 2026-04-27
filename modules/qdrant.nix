@@ -9,10 +9,9 @@ in
     services.qdrant = {
       enable = true;
       settings = {
-        storage = {
-          storage_path = "${cfg.stateDir}/qdrant/storage";
-          snapshots_path = "${cfg.stateDir}/qdrant/snapshots";
-        };
+        # Use Qdrant's default storage paths (/var/lib/qdrant) — its own user
+        # owns that tree. Don't repoint into ${cfg.stateDir} or Qdrant fails
+        # with Permission denied.
         service = {
           host = "127.0.0.1";
           http_port = cfg.ports.qdrant;

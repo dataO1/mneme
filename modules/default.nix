@@ -90,7 +90,6 @@ in
 
     systemd.tmpfiles.rules = [
       "d ${cfg.stateDir} 0750 ${cfg.user} ${cfg.group} -"
-      "d ${cfg.stateDir}/qdrant 0750 ${cfg.user} ${cfg.group} -"
       "d ${cfg.stateDir}/ovms-models 0750 ${cfg.user} ${cfg.group} -"
       "d ${cfg.stateDir}/vault-mcp 0750 ${cfg.user} ${cfg.group} -"
     ];
