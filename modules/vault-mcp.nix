@@ -8,6 +8,15 @@ let
 
   python = pkgs.python311;
 
+  # pip-installed binary wheels (numpy, torch, ...) link against the system
+  # libstdc++ etc. Pure NixOS doesn't expose those, so set LD_LIBRARY_PATH.
+  wheelLibPath = lib.makeLibraryPath (with pkgs; [
+    stdenv.cc.cc.lib
+    zlib
+    glib
+    openssl
+  ]);
+
   sources =
     (lib.optional (cfg.obsidianVault != null) {
       name = "obsidian";
@@ -110,6 +119,7 @@ in
       requires = [ "qdrant.service" ];
       wants = [ "network-online.target" ];
 
+      environment.LD_LIBRARY_PATH = wheelLibPath;
       serviceConfig = {
         Type = "simple";
         User = cfg.user;
