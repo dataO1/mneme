@@ -259,31 +259,38 @@ PY'
   echo
 }
 
-stage_static_nomic() {
-  echo "=== [5] Static-shape nomic-embed-text-v1.5 compile test on NPU ==="
-  echo "Tries seq_len 8192 → 2048 → 512, prints the largest that compiles."
-  echo "If any work, nomic-embed-text-v1.5 ships in the production pull;"
+stage_static_long() {
+  echo "=== [5] Static-shape long-context model compile test on NPU ==="
+  echo "Default model: Snowflake/snowflake-arctic-embed-m-long (137M, BERT,"
+  echo "2048 ctx — 4× bge-base). Override with MODEL env var."
+  echo "Tries seq_len 2048 → 512, prints the largest that compiles."
+  echo "If any work, that model ships in the production pull;"
   echo "if none, fall back to bge-base @ [1, 512] (NPU-3)."
+  echo
+  echo "Note: nomic-embed-text-v1.5 was first choice but uses a custom"
+  echo "      nomic_bert architecture that optimum-intel doesn't natively"
+  echo "      support. Arctic-m-long is the next-best 'standard BERT,"
+  echo "      long context' option."
   echo
 
   podman_npu \
     --entrypoint /bin/bash \
     -e HF_HOME=/tmp/hf-cache \
+    -e MODEL="${MODEL:-Snowflake/snowflake-arctic-embed-m-long}" \
     "$OV_DEV_IMAGE" \
     -lc '
 set -e
 echo "Installing optimum[openvino] (one-shot, in-container)..."
 pip install --quiet --no-warn-script-location \
-  "optimum[openvino]>=1.20" "openvino-tokenizers" "einops"
-# nomic uses einops in some configs; harmless if unused.
+  "optimum[openvino]>=1.20" "openvino-tokenizers"
 
 python3 - <<PY
-import subprocess, sys
+import os, subprocess, sys
 import numpy as np
 import openvino as ov
 
-MODEL = "nomic-ai/nomic-embed-text-v1.5"
-EXPORT_DIR = "/tmp/static-nomic"
+MODEL = os.environ["MODEL"]
+EXPORT_DIR = "/tmp/static-long"
 
 print(f"Exporting {MODEL} → {EXPORT_DIR} (INT8) ...")
 subprocess.check_call([
@@ -302,7 +309,10 @@ print()
 print("Dynamic input shapes:", [str(p.partial_shape) for p in fresh().inputs])
 
 results = []
-for seq_len in (8192, 2048, 512):
+# Largest first; arctic-m-long maxes at 2048. If MODEL is overridden to
+# something with longer context (e.g. an 8192 model that does export),
+# bump the list manually.
+for seq_len in (2048, 512):
     print(f"\n--- seq_len = {seq_len}")
     model = fresh()
     try:
@@ -345,10 +355,10 @@ for seq_len, status, _ in results:
 oks = [r for r in results if r[1] == "ok"]
 if oks:
     best = max(oks, key=lambda r: r[0])
-    print(f"\nVERDICT: nomic-embed-text-v1.5 compiles + runs on NPU at seq_len={best[0]}.")
+    print(f"\nVERDICT: {MODEL} compiles + runs on NPU at seq_len={best[0]}.")
     print("→ Proceed with NPU-2: ship this model + seq_len in the production pull.")
 else:
-    print("\nVERDICT: nomic-embed-text-v1.5 does not compile on NPU at any tested seq_len.")
+    print(f"\nVERDICT: {MODEL} does not compile on NPU at any tested seq_len.")
     print("→ Fall back to NPU-3: keep bge-base @ [1, 512].")
     sys.exit(2)
 PY'
@@ -375,11 +385,12 @@ case "${1:-all}" in
   minilm)        stage_minilm ;;
   serve-minilm)  stage_serve_minilm ;;
   static-bge)    stage_static_bge ;;
-  static-nomic)  stage_static_nomic ;;
+  static-long)   stage_static_long ;;
   debug)         stage_debug ;;
-  all)           stage_device; stage_compile; stage_minilm; stage_serve_minilm; stage_static_bge; stage_static_nomic ;;
+  all)           stage_device; stage_compile; stage_minilm; stage_serve_minilm; stage_static_bge; stage_static_long ;;
   *)
-    echo "Usage: $0 [device|compile|minilm|serve-minilm|static-bge|static-nomic|debug|all]" >&2
+    echo "Usage: $0 [device|compile|minilm|serve-minilm|static-bge|static-long|debug|all]" >&2
+    echo "  static-long: override model with MODEL=<hf/repo> env var" >&2
     exit 1
     ;;
 esac
