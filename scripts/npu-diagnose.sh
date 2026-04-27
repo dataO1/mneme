@@ -196,6 +196,64 @@ EOF
   echo "(timeout reached or container exited)"
 }
 
+stage_static_bge() {
+  echo "=== [4] Static-shape bge-base compile test on NPU (bypasses OVMS) ==="
+  echo "Exports BAAI/bge-base-en-v1.5 to OpenVINO IR, reshapes inputs to"
+  echo "[1, 512] (static), then calls core.compile_model(model, 'NPU')."
+  echo "If this works, the path forward is 'pre-export with static shapes'."
+  echo "If it fails, NPU 3 + bge-base is fundamentally incompatible."
+  echo
+
+  podman_npu \
+    --entrypoint /bin/bash \
+    -e HF_HOME=/tmp/hf-cache \
+    "$OV_DEV_IMAGE" \
+    -lc 'python3 - <<PY
+import subprocess, sys
+import numpy as np
+import openvino as ov
+
+print("Exporting BAAI/bge-base-en-v1.5 → /tmp/static-bge (INT8) ...")
+subprocess.check_call([
+    "optimum-cli", "export", "openvino",
+    "--model", "BAAI/bge-base-en-v1.5",
+    "--task", "feature-extraction",
+    "--weight-format", "int8",
+    "--library", "transformers",
+    "/tmp/static-bge",
+])
+
+core = ov.Core()
+model = core.read_model("/tmp/static-bge/openvino_model.xml")
+print("\nDynamic input shapes:", [str(p.partial_shape) for p in model.inputs])
+
+print("Reshaping all inputs to [1, 512] ...")
+model.reshape({p.get_any_name(): [1, 512] for p in model.inputs})
+print("Static input shapes:", [str(p.partial_shape) for p in model.inputs])
+
+print("\nCompiling on NPU ...")
+try:
+    compiled = core.compile_model(model, "NPU")
+    print("✓ compiled OK on NPU")
+except Exception as e:
+    print("✗ NPU compile failed:")
+    print(e)
+    sys.exit(2)
+
+print("\nInference smoke test ...")
+inputs = {
+    "input_ids":      np.zeros((1, 512), dtype=np.int64),
+    "attention_mask": np.ones( (1, 512), dtype=np.int64),
+    "token_type_ids": np.zeros((1, 512), dtype=np.int64),
+}
+inputs = {n: v for n, v in inputs.items() if any(p.get_any_name() == n for p in model.inputs)}
+result = compiled(inputs)
+shapes = [list(v.shape) for v in result.values()]
+print("✓ inference output shape(s):", shapes)
+PY'
+  echo
+}
+
 stage_debug() {
   echo "=== [4] Re-serve current bge-base config at debug log level ==="
   echo "Watch for the full NPU compile error chain. Ctrl-C to stop."
@@ -215,10 +273,11 @@ case "${1:-all}" in
   compile)       stage_compile ;;
   minilm)        stage_minilm ;;
   serve-minilm)  stage_serve_minilm ;;
+  static-bge)    stage_static_bge ;;
   debug)         stage_debug ;;
-  all)           stage_device; stage_compile; stage_minilm; stage_serve_minilm ;;
+  all)           stage_device; stage_compile; stage_minilm; stage_serve_minilm; stage_static_bge ;;
   *)
-    echo "Usage: $0 [device|compile|minilm|serve-minilm|debug|all]" >&2
+    echo "Usage: $0 [device|compile|minilm|serve-minilm|static-bge|debug|all]" >&2
     exit 1
     ;;
 esac
