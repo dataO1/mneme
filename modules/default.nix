@@ -152,12 +152,18 @@ in
 
     indexWorkers = lib.mkOption {
       type = lib.types.int;
-      default = 16;
+      default = 1;
       description = ''
         Worker count for parallel file loading inside vault-mcp's
         SimpleDirectoryReader. Upstream calls load_data() with no kwargs,
-        making the initial scan single-threaded. The bootstrap patches
-        the call site to pass num_workers=this. Set to 1 to disable.
+        making the initial scan single-threaded; the bootstrap patches
+        the call site to pass num_workers=this.
+
+        Default 1 (single-process). Higher values use Python's
+        multiprocessing.Pool, which deadlocks if any worker dies on a
+        malformed file (and home directories have plenty of those).
+        Increase only if you've curated the input set and accept the
+        deadlock risk.
       '';
     };
 

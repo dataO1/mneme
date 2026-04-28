@@ -254,6 +254,49 @@ in
       };
     };
 
+    # Liveness watchdog: vault-mcp can deadlock (multiprocessing.Pool worker
+    # dies, main waits forever on the queue) — observed twice now, including
+    # mid-initial-indexing. The signal we use is journal-log silence: if
+    # the unit hasn't logged anything for 10 minutes, restart it. Works
+    # regardless of whether the HTTP port is bound (so we don't false-
+    # trigger during legitimately slow initial indexing, which still emits
+    # progress lines and pypdf warnings the whole way through).
+    systemd.services."mneme-vault-mcp-watchdog" = {
+      description = "mneme: restart vault-mcp on journal-log silence";
+      serviceConfig = {
+        Type = "oneshot";
+        User = "root";
+        ExecStart = pkgs.writeShellScript "mneme-vault-mcp-watchdog" ''
+          set -u
+          MAX_SILENCE=600   # seconds (10 min)
+          if ! ${pkgs.systemd}/bin/systemctl is-active --quiet mneme-vault-mcp.service; then
+            exit 0
+          fi
+          last=$(${pkgs.systemd}/bin/journalctl -u mneme-vault-mcp.service \
+                   -n 1 --output=short-unix --no-pager 2>/dev/null \
+                 | ${pkgs.gawk}/bin/awk '{print int($1)}' | tail -1)
+          if [ -z "$last" ]; then
+            exit 0
+          fi
+          now=$(date +%s)
+          silence=$((now - last))
+          if [ "$silence" -gt "$MAX_SILENCE" ]; then
+            echo "[mneme-watchdog] $silence s of journal silence — restarting vault-mcp"
+            ${pkgs.systemd}/bin/systemctl restart mneme-vault-mcp.service
+          fi
+        '';
+      };
+    };
+
+    systemd.timers."mneme-vault-mcp-watchdog" = {
+      description = "Periodic vault-mcp liveness check";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "5min";
+        OnUnitActiveSec = "2min";
+      };
+    };
+
     systemd.services."mneme-vault-mcp" = {
       description = "mneme: vault-mcp MCP server";
       wantedBy = [ "multi-user.target" ];
